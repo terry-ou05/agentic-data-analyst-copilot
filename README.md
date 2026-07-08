@@ -1,19 +1,17 @@
 # Agentic Data Analyst Copilot
 
-Agentic Data Analyst Copilot is a local Streamlit application for exploring tabular datasets before adding an LLM agent workflow. The V1 version focuses on reliable CSV upload, sample-data loading, data preview, and schema summary.
+Agentic Data Analyst Copilot is a local Streamlit application for exploring tabular datasets before adding an LLM agent workflow. The V1.1 version focuses on reliable CSV upload, sample-data loading, data preview, and schema inspection.
 
-This project is intended as a job-search and resume showcase AI project. Future versions will add an LLM analysis planner, safe code generation, execution review, and evaluation metrics. V1 intentionally does not include LangGraph, DeepSeek, or a code executor.
+This project is intended as a job-search and resume showcase AI project. Future versions will add an LLM analysis planner, safe code generation, execution review, and evaluation metrics. V1.1 intentionally does not include LangGraph, DeepSeek, or a code executor.
 
 ## Features
 
 - Upload a CSV file in the Streamlit UI
 - Load `data/samples/sales_demo.csv` when no file is uploaded
 - Preview the first 20 rows
-- Show number of rows and columns
-- Show column names
-- Show data types
-- Show missing values per column
-- Display current project stage and next step in the sidebar
+- Show metric cards for rows, columns, and total missing values
+- Show a schema summary table with column names, data types, missing values, and missing percentages
+- Display project stage, dataset source, and next step in the sidebar
 
 ## Tech Stack
 
@@ -58,8 +56,8 @@ streamlit run app/streamlit_app.py
 
 ## Current Stage
 
-V1 Data Upload
+V1.1 Data Upload & Schema Inspection
 
 ## Next Step
 
-LLM Analysis Planner
+V2 LLM Analysis Planner

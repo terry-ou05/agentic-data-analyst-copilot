@@ -2,15 +2,27 @@ import pandas as pd
 
 
 def build_schema_summary(dataframe: pd.DataFrame) -> dict:
-    """Create the basic dataset summary shown in the V1 app."""
+    """Create the dataset summary shown in the Streamlit app."""
+    row_count = int(dataframe.shape[0])
+    missing_values = dataframe.isna().sum()
+    if row_count:
+        missing_percentage = (missing_values / row_count * 100).round(2)
+    else:
+        missing_percentage = pd.Series(0, index=dataframe.columns)
+
+    schema_table = pd.DataFrame(
+        {
+            "column name": dataframe.columns,
+            "data type": dataframe.dtypes.astype(str).values,
+            "missing values": missing_values.values,
+            "missing percentage": missing_percentage.values,
+        }
+    )
+
     return {
-        "number_of_rows": int(dataframe.shape[0]),
+        "number_of_rows": row_count,
         "number_of_columns": int(dataframe.shape[1]),
         "column_names": list(dataframe.columns),
-        "data_types": dataframe.dtypes.astype(str).reset_index().rename(
-            columns={"index": "column", 0: "dtype"}
-        ),
-        "missing_values": dataframe.isna().sum().reset_index().rename(
-            columns={"index": "column", 0: "missing_values"}
-        ),
+        "total_missing_values": int(missing_values.sum()),
+        "schema_table": schema_table,
     }

@@ -15,11 +15,12 @@ from src.data.schema import build_schema_summary
 SAMPLE_DATASET = PROJECT_ROOT / "data" / "samples" / "sales_demo.csv"
 
 
-def render_sidebar(summary: dict) -> None:
+def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.header("Project Stage")
-    st.sidebar.write("V1 Data Upload")
+    st.sidebar.write("V1.1 Data Upload & Schema Inspection")
 
     st.sidebar.header("Dataset Info")
+    st.sidebar.write(f"Dataset Source: {dataset_source}")
     st.sidebar.metric("Rows", summary["number_of_rows"])
     st.sidebar.metric("Columns", summary["number_of_columns"])
 
@@ -28,18 +29,7 @@ def render_sidebar(summary: dict) -> None:
 
 
 def render_schema_summary(summary: dict) -> None:
-    col1, col2 = st.columns(2)
-    col1.metric("Number of rows", summary["number_of_rows"])
-    col2.metric("Number of columns", summary["number_of_columns"])
-
-    st.subheader("Column Names")
-    st.write(summary["column_names"])
-
-    st.subheader("Data Types")
-    st.dataframe(summary["data_types"], use_container_width=True)
-
-    st.subheader("Missing Values Per Column")
-    st.dataframe(summary["missing_values"], use_container_width=True)
+    st.dataframe(summary["schema_table"], use_container_width=True)
 
 
 def main() -> None:
@@ -50,7 +40,10 @@ def main() -> None:
     )
 
     st.title("Agentic Data Analyst Copilot")
-    st.caption("V1 local data upload foundation for a future LLM agent workflow.")
+    st.caption(
+        "Upload a CSV dataset, inspect its schema, and prepare it for future "
+        "agentic analysis workflows."
+    )
 
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
@@ -58,19 +51,26 @@ def main() -> None:
         st.info("No file uploaded. Loading the sample dataset.")
         dataframe = load_csv(SAMPLE_DATASET)
         dataset_name = SAMPLE_DATASET.name
+        dataset_source = "Sample CSV"
     else:
         dataframe = load_csv(uploaded_file)
         dataset_name = uploaded_file.name
+        dataset_source = "Uploaded CSV"
 
     summary = build_schema_summary(dataframe)
-    render_sidebar(summary)
+    render_sidebar(summary, dataset_source)
 
     st.subheader(f"Dataset: {dataset_name}")
+
+    metric_col1, metric_col2, metric_col3 = st.columns(3)
+    metric_col1.metric("Rows", summary["number_of_rows"])
+    metric_col2.metric("Columns", summary["number_of_columns"])
+    metric_col3.metric("Missing Values", summary["total_missing_values"])
 
     st.subheader("Data Preview")
     st.dataframe(dataframe.head(20), use_container_width=True)
 
-    st.subheader("Data Overview")
+    st.subheader("Schema Summary")
     render_schema_summary(summary)
 
 
