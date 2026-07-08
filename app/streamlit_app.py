@@ -10,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.data.loader import load_csv
 from src.data.schema import build_schema_summary
+from src.agents.planner import generate_analysis_plan
 
 
 SAMPLE_DATASET = PROJECT_ROOT / "data" / "samples" / "sales_demo.csv"
@@ -17,7 +18,7 @@ SAMPLE_DATASET = PROJECT_ROOT / "data" / "samples" / "sales_demo.csv"
 
 def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.header("Project Stage")
-    st.sidebar.write("V1.1 Data Upload & Schema Inspection")
+    st.sidebar.write("V2 LLM Analysis Planner")
 
     st.sidebar.header("Dataset Info")
     st.sidebar.write(f"Dataset Source: {dataset_source}")
@@ -25,11 +26,39 @@ def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.metric("Columns", summary["number_of_columns"])
 
     st.sidebar.header("Next Step")
-    st.sidebar.write("LLM Analysis Planner")
+    st.sidebar.write("Safe Code Generation (future)")
 
 
 def render_schema_summary(summary: dict) -> None:
     st.dataframe(summary["schema_table"], use_container_width=True)
+
+
+def render_analysis_planner(summary: dict) -> None:
+    st.subheader("Ask a Business Question")
+    st.write(
+        "Generate a structured analysis plan from the current dataset schema. "
+        "V2 does not generate or execute code."
+    )
+
+    user_question = st.text_area(
+        "Business question",
+        placeholder="Example: Which region and product category should we investigate for revenue decline?",
+        height=100,
+    )
+
+    if st.button("Generate Analysis Plan", type="primary"):
+        if not user_question.strip():
+            st.warning("Enter a business question before generating an analysis plan.")
+            return
+
+        with st.spinner("Generating analysis plan..."):
+            result = generate_analysis_plan(summary, user_question.strip())
+
+        if result.success:
+            st.markdown(result.content)
+        else:
+            st.error(result.error)
+            st.info("Create a local .env file from .env.example and configure your LLM settings.")
 
 
 def main() -> None:
@@ -72,6 +101,8 @@ def main() -> None:
 
     st.subheader("Schema Summary")
     render_schema_summary(summary)
+
+    render_analysis_planner(summary)
 
 
 if __name__ == "__main__":

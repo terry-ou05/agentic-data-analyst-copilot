@@ -1,8 +1,11 @@
 * text=auto
 
+.gitattributes text eol=lf
 *.py text eol=lf
 *.md text eol=lf
 *.txt text eol=lf
+*.example text eol=lf
+.env* text eol=lf
 *.csv text eol=lf
 *.json text eol=lf
 *.toml text eol=lf
