@@ -10,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.data.loader import load_csv
 from src.data.schema import build_schema_summary
+from src.agents.code_generator import generate_analysis_code
 from src.agents.planner import generate_analysis_plan
 from src.llm.client import get_llm_config
 
@@ -19,7 +20,7 @@ SAMPLE_DATASET = PROJECT_ROOT / "data" / "samples" / "sales_demo.csv"
 
 def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.header("Project Stage")
-    st.sidebar.write("V2 LLM Analysis Planner")
+    st.sidebar.write("V3 Code Generation Preview")
 
     st.sidebar.header("Dataset Info")
     st.sidebar.write(f"Dataset Source: {dataset_source}")
@@ -34,7 +35,7 @@ def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.write(f"API Key: {api_key_status}")
 
     st.sidebar.header("Next Step")
-    st.sidebar.write("Safe Code Generation (future)")
+    st.sidebar.write("V4 Code Review / Safety Guard")
 
 
 def render_schema_summary(summary: dict) -> None:
@@ -44,8 +45,11 @@ def render_schema_summary(summary: dict) -> None:
 def render_analysis_planner(summary: dict) -> None:
     st.subheader("Ask a Business Question")
     st.write(
-        "Generate a structured analysis plan from the current dataset schema. "
-        "V2 does not generate or execute code."
+        "Generate an analysis plan and pandas/Plotly code preview from the "
+        "current dataset schema."
+    )
+    st.info(
+        "Code is generated for preview only and is not executed in V3."
     )
 
     user_question = st.text_area(
@@ -54,19 +58,37 @@ def render_analysis_planner(summary: dict) -> None:
         height=100,
     )
 
-    if st.button("Generate Analysis Plan", type="primary"):
+    if st.button("Generate Analysis Plan and Code Preview", type="primary"):
         if not user_question.strip():
             st.warning("Enter a business question before generating an analysis plan.")
             return
 
         with st.spinner("Generating analysis plan..."):
-            result = generate_analysis_plan(summary, user_question.strip())
+            plan_result = generate_analysis_plan(summary, user_question.strip())
 
-        if result.success:
-            st.markdown(result.content)
-        else:
-            st.error(result.error)
+        if not plan_result.success:
+            st.error(plan_result.error)
             st.info("Create a local .env file from .env.example and configure your LLM settings.")
+            return
+
+        st.subheader("Analysis Plan")
+        st.markdown(plan_result.content)
+
+        with st.spinner("Generating code preview..."):
+            code_result = generate_analysis_code(
+                summary,
+                user_question.strip(),
+                plan_result.content,
+            )
+
+        if not code_result.success:
+            st.error(code_result.error)
+            st.info("The analysis plan was generated, but the code preview request failed.")
+            return
+
+        st.subheader("Generated Code Preview")
+        st.caption("Code is generated for preview only and is not executed in V3.")
+        st.code(code_result.content, language="python")
 
 
 def main() -> None:

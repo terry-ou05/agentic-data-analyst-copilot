@@ -1,8 +1,8 @@
 # Agentic Data Analyst Copilot
 
-Agentic Data Analyst Copilot is a local Streamlit application for exploring tabular datasets and preparing structured analysis plans. The V2 version adds an LLM Analysis Planner that turns a natural-language business question and dataset schema into a structured analysis plan.
+Agentic Data Analyst Copilot is a local Streamlit application for exploring tabular datasets, preparing structured analysis plans, and previewing pandas/Plotly analysis code. The V3 version generates an analysis plan first, then generates code preview text from the plan and dataset schema.
 
-This project is intended as a job-search and resume showcase AI project. V2 intentionally does not include LangGraph, generated pandas or Plotly code, code execution, code review, or a code executor.
+This project is intended as a job-search and resume showcase AI project. V3 intentionally does not include LangGraph, code execution, code review, sandboxing, or a code executor.
 
 ## Features
 
@@ -15,7 +15,8 @@ This project is intended as a job-search and resume showcase AI project. V2 inte
 - Ask a natural-language business question
 - Generate a structured LLM analysis plan from the dataset schema
 - Keep planner outputs grounded in real schema columns, with missing fields called out explicitly
-- Keep V2 limited to planning only, with no generated code and no execution
+- Generate pandas/Plotly code preview from the analysis plan and dataset schema
+- Keep V3 limited to preview only, with no generated code execution
 
 ## Tech Stack
 
@@ -32,6 +33,7 @@ agentic-data-analyst-copilot/
 |   +-- streamlit_app.py
 +-- src/
 |   +-- agents/
+|       +-- code_generator.py
 |       +-- planner.py
 |   +-- data/
 |       +-- loader.py
@@ -78,17 +80,32 @@ streamlit run app/streamlit_app.py
 
 ## Current Stage
 
-V2.1 Prompt Quality Polish
+V3 Code Generation Preview
 
 ## Next Step
 
-Safe Code Generation (future)
+V4 Code Review / Safety Guard
+
+## Roadmap
+
+- V1: CSV upload
+- V1.1: UI and schema inspection
+- V2: LLM Analysis Planner
+- V2.1: Prompt Quality Polish
+- V3: Code Generation Preview
+- V4: Code Review / Safety Guard
 
 ## V2.1 Prompt Quality Improvements
 
 V2.1 improves the planner prompt so that generated plans use exact dataset column names, avoid invented fields, and separate unavailable fields into a dedicated section. The planner remains analysis-plan only: it does not calculate final answers, generate pandas or Plotly code, execute code, or add LangGraph.
 
 When a question mentions `category`, the prompt directs the planner to prefer a real `category` field if it exists and not substitute `product` unless the user explicitly asks about product.
+
+## V3 Code Generation Preview
+
+V3 adds a code preview step after analysis planning. The app asks the LLM to generate pandas and Plotly code that assumes the current dataset is already available as a DataFrame named `df`.
+
+The generated code is displayed with syntax highlighting for review only. V3 does not execute generated code, does not add a code executor, does not read or save files from generated code, and does not add LangGraph or a complex agent workflow.
 
 ## V2 Scope
 
@@ -105,3 +122,12 @@ V2 supports natural-language questions and returns an analysis plan with:
 - Business Interpretation Notes
 
 V2 does not generate Python code and does not execute code.
+
+## V3 Scope
+
+V3 supports natural-language questions and returns:
+
+- Analysis Plan
+- Generated Code Preview
+
+Generated code is constrained to pandas and `plotly.express`, must use real schema column names, and is displayed with `st.code(..., language="python")`. The app does not execute the generated code in V3.
