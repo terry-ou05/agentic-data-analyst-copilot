@@ -1,5 +1,12 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DOTENV_PATH = PROJECT_ROOT / ".env"
+DEFAULT_BASE_URL = "https://api.deepseek.com"
+DEFAULT_MODEL = "deepseek-v4-pro"
 
 
 @dataclass
@@ -15,7 +22,19 @@ def _load_dotenv_if_available() -> None:
     except ImportError:
         return
 
-    load_dotenv()
+    load_dotenv(dotenv_path=DOTENV_PATH, override=True)
+
+
+def get_llm_config() -> dict:
+    """Return non-sensitive LLM configuration for UI and diagnostics."""
+    _load_dotenv_if_available()
+
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    return {
+        "model": os.getenv("LLM_MODEL", DEFAULT_MODEL),
+        "base_url": os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL),
+        "api_key_configured": bool(api_key),
+    }
 
 
 def generate_chat_completion(messages: list[dict]) -> LLMResult:
@@ -32,8 +51,9 @@ def generate_chat_completion(messages: list[dict]) -> LLMResult:
             ),
         )
 
-    model = os.getenv("LLM_MODEL", "gpt-4.1-mini")
-    base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
+    config = get_llm_config()
+    model = config["model"]
+    base_url = config["base_url"]
 
     try:
         from openai import OpenAI

@@ -14,6 +14,7 @@ This project is intended as a job-search and resume showcase AI project. V2 inte
 - Display project stage, dataset source, and next step in the sidebar
 - Ask a natural-language business question
 - Generate a structured LLM analysis plan from the dataset schema
+- Keep planner outputs grounded in real schema columns, with missing fields called out explicitly
 - Keep V2 limited to planning only, with no generated code and no execution
 
 ## Tech Stack
@@ -58,12 +59,14 @@ pip install -r requirements.txt
 Create a local `.env` file from `.env.example`:
 
 ```env
-LLM_API_KEY=your_api_key_here
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_MODEL=gpt-4.1-mini
+LLM_API_KEY=your_deepseek_api_key_here
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-pro
 ```
 
-For OpenAI-compatible providers, set `LLM_BASE_URL` and `LLM_MODEL` to the provider values. Do not commit `.env`.
+`.env.example` is only a template. Put real local credentials in `.env`, keep `.env` in the project root, and do not commit it. The app reads `.env` on startup and shows the active model and base URL in the sidebar without displaying the API key.
+
+For other OpenAI-compatible providers, set `LLM_BASE_URL` and `LLM_MODEL` to the provider values.
 
 ## Run
 
@@ -75,11 +78,17 @@ streamlit run app/streamlit_app.py
 
 ## Current Stage
 
-V2 LLM Analysis Planner
+V2.1 Prompt Quality Polish
 
 ## Next Step
 
 Safe Code Generation (future)
+
+## V2.1 Prompt Quality Improvements
+
+V2.1 improves the planner prompt so that generated plans use exact dataset column names, avoid invented fields, and separate unavailable fields into a dedicated section. The planner remains analysis-plan only: it does not calculate final answers, generate pandas or Plotly code, execute code, or add LangGraph.
+
+When a question mentions `category`, the prompt directs the planner to prefer a real `category` field if it exists and not substitute `product` unless the user explicitly asks about product.
 
 ## V2 Scope
 
@@ -87,10 +96,12 @@ V2 supports natural-language questions and returns an analysis plan with:
 
 - Analysis Goal
 - Relevant Columns
+- Missing or Unavailable Columns
 - Data Quality Checks
 - Calculation Steps
 - Suggested Visualizations
 - Expected Output
+- Assumptions / Limitations
 - Business Interpretation Notes
 
 V2 does not generate Python code and does not execute code.

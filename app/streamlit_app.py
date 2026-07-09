@@ -11,6 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.data.loader import load_csv
 from src.data.schema import build_schema_summary
 from src.agents.planner import generate_analysis_plan
+from src.llm.client import get_llm_config
 
 
 SAMPLE_DATASET = PROJECT_ROOT / "data" / "samples" / "sales_demo.csv"
@@ -24,6 +25,13 @@ def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.write(f"Dataset Source: {dataset_source}")
     st.sidebar.metric("Rows", summary["number_of_rows"])
     st.sidebar.metric("Columns", summary["number_of_columns"])
+
+    llm_config = get_llm_config()
+    api_key_status = "Configured" if llm_config["api_key_configured"] else "Missing"
+    st.sidebar.header("LLM Configuration")
+    st.sidebar.write(f"Model: {llm_config['model']}")
+    st.sidebar.write(f"Base URL: {llm_config['base_url']}")
+    st.sidebar.write(f"API Key: {api_key_status}")
 
     st.sidebar.header("Next Step")
     st.sidebar.write("Safe Code Generation (future)")
