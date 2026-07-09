@@ -69,12 +69,23 @@ def build_analysis_code_prompt(
     schema_summary: dict,
     user_question: str,
     analysis_plan: str,
-    field_selection_hint: str,
+    target_group_column: str | None,
 ) -> str:
     """Build the prompt for V3 code preview generation."""
     schema_table = schema_summary["schema_table"].to_string(index=False)
     column_names = ", ".join(schema_summary["column_names"])
     valid_columns = "\n".join(f"- {column_name}" for column_name in schema_summary["column_names"])
+    target_group_instruction = (
+        f"""
+Target Group Column: {target_group_column}
+You MUST use df.groupby("{target_group_column}") for grouping.
+The generated code must contain df.groupby("{target_group_column}").
+Do not replace it with another grouping column.
+Do not use any other grouping column.
+""".strip()
+        if target_group_column
+        else "Target Group Column: None resolved. Choose grouping columns only from the Valid column names allowlist when grouping is needed."
+    )
 
     return f"""
 Generate a Python code preview for the user's analysis request.
@@ -82,8 +93,8 @@ Generate a Python code preview for the user's analysis request.
 This is V3 Code Generation Preview. The generated code will be shown to the user only.
 It must not be executed by the application in this stage.
 
-High-priority field selection instruction:
-{field_selection_hint}
+Deterministic grouping instruction:
+{target_group_instruction}
 
 Dataset summary:
 - Number of rows: {schema_summary["number_of_rows"]}
@@ -122,10 +133,13 @@ Column and data constraints:
 - Use exact column names from the Valid column names allowlist.
 - Do not invent, rename, or assume unavailable columns.
 - Follow the Analysis Plan's Relevant Columns as the primary source for selecting fields.
-- If the Analysis Plan's Relevant Columns includes category, prefer category for category-level grouping.
+- If the Deterministic grouping instruction conflicts with the Analysis Plan, follow the Deterministic grouping instruction.
 - The groupby fields must match the user's business meaning, not just a similarly named column.
 - If the user question contains category and the schema contains category, use category instead of product.
 - If the user question contains product category, interpret that phrase as the category field.
+- Never invent a column named product_category.
+- Never invent or use schema-absent fields such as unit_price, expected_revenue, or product_category.
+- If the user says product category and the schema contains category, use category and do not reject the analysis because product_category is absent.
 - If both product and category exist in the schema, product means concrete product name and category means product category.
 - Use product only for concrete product-name analysis, such as questions that explicitly ask which product or compare products by name.
 - Do not group by product when the user is asking about product category and category exists in the schema.
@@ -133,6 +147,7 @@ Column and data constraints:
 - If the analysis plan mentions a missing or unavailable column, do not reference that column in executable code.
 - Derived fields are allowed only when they can be created from exact existing columns.
 - For example, profit = revenue - cost is allowed only if both revenue and cost exist in the schema.
+- Do not create derived fields from unavailable or invented inputs.
 - If a required field is unavailable, include a short code comment explaining the limitation and proceed only with available columns.
 
 Output requirements:
@@ -140,9 +155,11 @@ Output requirements:
 - Do not wrap the code in Markdown fences.
 - Do not include prose outside comments.
 - Do not generate pd.read_csv, open, eval, exec, or any file/network/system access.
+- Do not generate assert checks for dtypes.
+- Do not generate complex data quality validation code.
 - The final tabular result should be assigned to a variable named result when relevant.
 - The main Plotly chart should be assigned to a variable named fig when relevant.
 - Include concise comments explaining the analysis steps.
 - Do not compute or claim a final business answer in comments.
-- Keep the code preview focused on pandas transformations and optional plotly.express visualization.
+- Keep the code preview concise and focused on pandas transformations and optional plotly.express visualization.
 """.strip()

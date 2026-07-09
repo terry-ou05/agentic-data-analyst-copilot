@@ -81,14 +81,19 @@ def render_analysis_planner(summary: dict) -> None:
                 plan_result.content,
             )
 
-        if not code_result.success:
-            st.error(code_result.error)
+        if not code_result["success"]:
+            st.error(code_result["error"])
             st.info("The analysis plan was generated, but the code preview request failed.")
             return
 
         st.subheader("Generated Code Preview")
         st.caption("Code is generated for preview only and is not executed in V3.")
-        st.code(code_result.content, language="python")
+        st.write(f"Code Source: {code_result['source']}")
+        if code_result["target_group_column"]:
+            st.write(f"Target Group Column: {code_result['target_group_column']}")
+        if code_result["metric_column"]:
+            st.write(f"Metric Column: {code_result['metric_column']}")
+        st.code(code_result["code"], language="python")
 
 
 def main() -> None:

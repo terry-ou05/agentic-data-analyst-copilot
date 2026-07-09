@@ -105,7 +105,13 @@ When a question mentions `category`, the prompt directs the planner to prefer a 
 
 V3 adds a code preview step after analysis planning. The app asks the LLM to generate pandas and Plotly code that assumes the current dataset is already available as a DataFrame named `df`.
 
-V3 also includes lightweight field selection hints so category-level questions use the `category` field instead of concrete product-name fields.
+V3 also includes deterministic field selection so category-level questions use the `category` field instead of concrete product-name fields, including mapping "product category" to the existing `category` column.
+
+V3 uses deterministic templates for simple groupby revenue questions to reduce LLM field-selection errors.
+
+V3 routes simple highest/top revenue aggregation questions to deterministic templates before LLM fallback.
+
+V3 displays the code generation source so users can distinguish deterministic templates from LLM-generated previews.
 
 The generated code is displayed with syntax highlighting for review only. V3 does not execute generated code, does not add a code executor, does not read or save files from generated code, and does not add LangGraph or a complex agent workflow.
 
