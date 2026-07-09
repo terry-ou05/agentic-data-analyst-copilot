@@ -69,6 +69,7 @@ def build_analysis_code_prompt(
     schema_summary: dict,
     user_question: str,
     analysis_plan: str,
+    field_selection_hint: str,
 ) -> str:
     """Build the prompt for V3 code preview generation."""
     schema_table = schema_summary["schema_table"].to_string(index=False)
@@ -80,6 +81,9 @@ Generate a Python code preview for the user's analysis request.
 
 This is V3 Code Generation Preview. The generated code will be shown to the user only.
 It must not be executed by the application in this stage.
+
+High-priority field selection instruction:
+{field_selection_hint}
 
 Dataset summary:
 - Number of rows: {schema_summary["number_of_rows"]}
@@ -122,8 +126,10 @@ Column and data constraints:
 - The groupby fields must match the user's business meaning, not just a similarly named column.
 - If the user question contains category and the schema contains category, use category instead of product.
 - If the user question contains product category, interpret that phrase as the category field.
+- If both product and category exist in the schema, product means concrete product name and category means product category.
 - Use product only for concrete product-name analysis, such as questions that explicitly ask which product or compare products by name.
 - Do not group by product when the user is asking about product category and category exists in the schema.
+- Do not write comments or explanations such as "product treated as product category".
 - If the analysis plan mentions a missing or unavailable column, do not reference that column in executable code.
 - Derived fields are allowed only when they can be created from exact existing columns.
 - For example, profit = revenue - cost is allowed only if both revenue and cost exist in the schema.
