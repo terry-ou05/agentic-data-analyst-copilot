@@ -117,6 +117,13 @@ Required code environment:
 Column and data constraints:
 - Use exact column names from the Valid column names allowlist.
 - Do not invent, rename, or assume unavailable columns.
+- Follow the Analysis Plan's Relevant Columns as the primary source for selecting fields.
+- If the Analysis Plan's Relevant Columns includes category, prefer category for category-level grouping.
+- The groupby fields must match the user's business meaning, not just a similarly named column.
+- If the user question contains category and the schema contains category, use category instead of product.
+- If the user question contains product category, interpret that phrase as the category field.
+- Use product only for concrete product-name analysis, such as questions that explicitly ask which product or compare products by name.
+- Do not group by product when the user is asking about product category and category exists in the schema.
 - If the analysis plan mentions a missing or unavailable column, do not reference that column in executable code.
 - Derived fields are allowed only when they can be created from exact existing columns.
 - For example, profit = revenue - cost is allowed only if both revenue and cost exist in the schema.
@@ -126,6 +133,7 @@ Output requirements:
 - Return only Python code.
 - Do not wrap the code in Markdown fences.
 - Do not include prose outside comments.
+- Do not generate pd.read_csv, open, eval, exec, or any file/network/system access.
 - The final tabular result should be assigned to a variable named result when relevant.
 - The main Plotly chart should be assigned to a variable named fig when relevant.
 - Include concise comments explaining the analysis steps.
