@@ -76,8 +76,38 @@ def generate_chat_completion(messages: list[dict]) -> LLMResult:
     except Exception as exc:
         return LLMResult(
             success=False,
-            error=f"LLM request failed: {exc.__class__.__name__}: {exc}",
+            error=(
+                f"LLM request failed ({exc.__class__.__name__}). "
+                "Please try again."
+            ),
         )
 
-    content = response.choices[0].message.content or ""
-    return LLMResult(success=True, content=content.strip())
+    try:
+        if response is None:
+            raise ValueError("response is missing")
+
+        choices = getattr(response, "choices", None)
+        if not choices:
+            raise ValueError("response choices are missing or empty")
+
+        message = getattr(choices[0], "message", None)
+        if message is None:
+            raise ValueError("response message is missing")
+
+        content = getattr(message, "content", None)
+        if not isinstance(content, str):
+            raise TypeError("response content is not text")
+
+        normalized_content = content.strip()
+        if not normalized_content:
+            raise ValueError("response content is empty")
+    except Exception as exc:
+        return LLMResult(
+            success=False,
+            error=(
+                "LLM returned an invalid or empty response "
+                f"({exc.__class__.__name__}). Please try again."
+            ),
+        )
+
+    return LLMResult(success=True, content=normalized_content)

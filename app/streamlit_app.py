@@ -8,11 +8,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.data.loader import load_csv
+from src.data.loader import CsvLoadError, load_csv
 from src.data.schema import build_schema_summary
 from src.agents.code_generator import generate_analysis_code
 from src.agents.planner import generate_analysis_plan
 from src.llm.client import get_llm_config
+from src.runtime.code_guard import review_code_safety
 
 
 SAMPLE_DATASET = PROJECT_ROOT / "data" / "samples" / "sales_demo.csv"
@@ -20,7 +21,7 @@ SAMPLE_DATASET = PROJECT_ROOT / "data" / "samples" / "sales_demo.csv"
 
 def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.header("Project Stage")
-    st.sidebar.write("V3 Code Generation Preview")
+    st.sidebar.write("V4 Code Safety Guard")
 
     st.sidebar.header("Dataset Info")
     st.sidebar.write(f"Dataset Source: {dataset_source}")
@@ -35,11 +36,36 @@ def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.write(f"API Key: {api_key_status}")
 
     st.sidebar.header("Next Step")
-    st.sidebar.write("V4 Code Review / Safety Guard")
+    st.sidebar.write("Future: reviewed execution path")
 
 
 def render_schema_summary(summary: dict) -> None:
     st.dataframe(summary["schema_table"], use_container_width=True)
+
+
+def render_code_safety_review(code: str) -> None:
+    safety_result = review_code_safety(code)
+    static_check_status = (
+        "blocked patterns detected"
+        if safety_result["issues"]
+        else "passed"
+    )
+
+    with st.container(border=True):
+        st.subheader("Code Safety Review")
+        st.write(f"Static check: {static_check_status}")
+        st.write(f"Pattern severity: {safety_result['risk_level']}")
+        st.caption(
+            "Preview only: this code has not been executed. Static checks do not "
+            "provide a complete security guarantee."
+        )
+
+        if safety_result["issues"]:
+            st.write("Issues:")
+            for issue in safety_result["issues"]:
+                st.warning(issue)
+        else:
+            st.success("No known blocked string pattern was detected by this limited check.")
 
 
 def render_analysis_planner(summary: dict) -> None:
@@ -49,8 +75,15 @@ def render_analysis_planner(summary: dict) -> None:
         "current dataset schema."
     )
     st.info(
-        "Code is generated for preview only and is not executed in V3."
+        "Code is generated for preview only and is not executed in V4."
     )
+
+    if summary["number_of_rows"] == 0:
+        st.warning(
+            "This CSV contains column headers but no data rows. "
+            "Add data rows before generating an analysis plan."
+        )
+        return
 
     user_question = st.text_area(
         "Business question",
@@ -87,13 +120,14 @@ def render_analysis_planner(summary: dict) -> None:
             return
 
         st.subheader("Generated Code Preview")
-        st.caption("Code is generated for preview only and is not executed in V3.")
+        st.caption("Code is generated for preview only and is not executed in V4.")
         st.write(f"Code Source: {code_result['source']}")
         if code_result["target_group_column"]:
             st.write(f"Target Group Column: {code_result['target_group_column']}")
         if code_result["metric_column"]:
             st.write(f"Metric Column: {code_result['metric_column']}")
         st.code(code_result["code"], language="python")
+        render_code_safety_review(code_result["code"])
 
 
 def main() -> None:
@@ -111,15 +145,19 @@ def main() -> None:
 
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
-    if uploaded_file is None:
-        st.info("No file uploaded. Loading the sample dataset.")
-        dataframe = load_csv(SAMPLE_DATASET)
-        dataset_name = SAMPLE_DATASET.name
-        dataset_source = "Sample CSV"
-    else:
-        dataframe = load_csv(uploaded_file)
-        dataset_name = uploaded_file.name
-        dataset_source = "Uploaded CSV"
+    try:
+        if uploaded_file is None:
+            st.info("No file uploaded. Loading the sample dataset.")
+            dataframe = load_csv(SAMPLE_DATASET)
+            dataset_name = SAMPLE_DATASET.name
+            dataset_source = "Sample CSV"
+        else:
+            dataframe = load_csv(uploaded_file)
+            dataset_name = uploaded_file.name
+            dataset_source = "Uploaded CSV"
+    except CsvLoadError as exc:
+        st.error(str(exc))
+        st.stop()
 
     summary = build_schema_summary(dataframe)
     render_sidebar(summary, dataset_source)

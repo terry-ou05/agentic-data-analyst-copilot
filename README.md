@@ -1,8 +1,8 @@
 # Agentic Data Analyst Copilot
 
-Agentic Data Analyst Copilot is a local Streamlit application for exploring tabular datasets, preparing structured analysis plans, and previewing pandas/Plotly analysis code. The V3 version generates an analysis plan first, then generates code preview text from the plan and dataset schema.
+Agentic Data Analyst Copilot is a local Streamlit application for exploring tabular datasets, preparing structured analysis plans, previewing pandas/Plotly analysis code, and reviewing generated code for basic safety risks. The V4 version adds a string-based Code Safety Guard for generated code previews.
 
-This project is intended as a job-search and resume showcase AI project. V3 intentionally does not include LangGraph, code execution, code review, sandboxing, or a code executor.
+This project is intended as a job-search and resume showcase AI project. V4 intentionally does not include LangGraph, code execution, sandboxing, or a code executor.
 
 ## Features
 
@@ -16,7 +16,8 @@ This project is intended as a job-search and resume showcase AI project. V3 inte
 - Generate a structured LLM analysis plan from the dataset schema
 - Keep planner outputs grounded in real schema columns, with missing fields called out explicitly
 - Generate pandas/Plotly code preview from the analysis plan and dataset schema
-- Keep V3 limited to preview only, with no generated code execution
+- Review generated code for disallowed string patterns such as file, network, and dynamic execution calls
+- Keep V4 limited to preview and safety review only, with no generated code execution
 
 ## Tech Stack
 
@@ -41,6 +42,8 @@ agentic-data-analyst-copilot/
 |   +-- llm/
 |       +-- client.py
 |       +-- prompts.py
+|   +-- runtime/
+|       +-- code_guard.py
 +-- data/
 |   +-- samples/
 |       +-- sales_demo.csv
@@ -80,11 +83,11 @@ streamlit run app/streamlit_app.py
 
 ## Current Stage
 
-V3 Code Generation Preview
+V4 Code Safety Guard
 
 ## Next Step
 
-V4 Code Review / Safety Guard
+Future reviewed execution path
 
 ## Roadmap
 
@@ -139,3 +142,9 @@ V3 supports natural-language questions and returns:
 - Generated Code Preview
 
 Generated code is constrained to pandas and `plotly.express`, must use real schema column names, and is displayed with `st.code(..., language="python")`. The app does not execute the generated code in V3.
+
+## V4 Code Safety Guard
+
+V4 adds a Code Safety Review card below the generated code preview. The first version uses string checks only, not AST parsing, to flag disallowed patterns such as `os`, `subprocess`, `socket`, `requests`, `shutil`, `open(`, `eval(`, `exec(`, `compile(`, `pd.read_csv(`, `to_csv(`, and `to_excel(`.
+
+The UI reports a limited static-check status, pattern severity, and detected issues. It reviews code text only, does not execute generated code, and does not present the string check as a complete safety guarantee.
