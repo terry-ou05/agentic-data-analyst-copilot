@@ -204,7 +204,7 @@ Required top-level JSON fields:
 Operation contracts:
 
 filter:
-{{"operation":"filter","column":"<existing column>","operator":"eq|ne|gt|gte|lt|lte|in|not_in","value":<JSON scalar or scalar list>}}
+{{"operation":"filter","column":"<existing column>","operator":"eq|ne|gt|gte|lt|lte|in|not_in|is_null|not_null","value":<JSON scalar or scalar list; use null for is_null/not_null>}}
 
 groupby:
 {{"operation":"groupby","columns":["<existing column>"]}}

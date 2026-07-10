@@ -6,7 +6,18 @@ from typing import Any, Mapping
 PLAN_VERSION = "1.0"
 MAX_TOP_N = 100
 FILTER_OPERATORS = frozenset(
-    {"eq", "ne", "gt", "gte", "lt", "lte", "in", "not_in"}
+    {
+        "eq",
+        "ne",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "in",
+        "not_in",
+        "is_null",
+        "not_null",
+    }
 )
 AGGREGATE_FUNCTIONS = frozenset({"sum", "mean", "min", "max", "count"})
 
@@ -37,8 +48,24 @@ class ValidationResult:
     errors: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ValidatedAnalysisPlan:
+    version: str
+    goal: str
+    operations: tuple[Operation, ...]
+    schema_columns: tuple[str, ...]
+
+
 class PlanParseError(ValueError):
     """Raised when a structured plan does not match the JSON contract."""
+
+
+class PlanValidationError(ValueError):
+    """Raised when an analysis plan cannot be promoted to a validated plan."""
+
+    def __init__(self, errors: tuple[str, ...]) -> None:
+        self.errors = errors
+        super().__init__("; ".join(errors))
 
 
 def _require_exact_fields(
@@ -257,9 +284,11 @@ def validate_analysis_plan(
                 errors.append(f"Filter column does not exist: {column}")
             if operator not in FILTER_OPERATORS:
                 errors.append(f"Unsupported filter operator: {operator}")
-            if operator in {"in", "not_in"} and not isinstance(value, list):
+            if operator in {"is_null", "not_null"} and value is not None:
+                errors.append(f"Filter operator {operator} requires a null value.")
+            elif operator in {"in", "not_in"} and not isinstance(value, list):
                 errors.append(f"Filter operator {operator} requires a list value.")
-            if operator not in {"in", "not_in"} and isinstance(value, list):
+            elif operator not in {"in", "not_in"} and isinstance(value, list):
                 errors.append(f"Filter operator {operator} requires a scalar value.")
 
         elif operation.operation_type is OperationType.GROUPBY:
@@ -308,3 +337,25 @@ def validate_analysis_plan(
         errors.append("top_n must be the final operation.")
 
     return ValidationResult(valid=not errors, errors=tuple(errors))
+
+
+def create_validated_analysis_plan(
+    plan: AnalysisPlan,
+    schema_summary: Mapping[str, Any],
+) -> ValidatedAnalysisPlan:
+    """Promote a parsed plan only after semantic validation succeeds."""
+    if not isinstance(plan, AnalysisPlan):
+        raise TypeError("plan must be an AnalysisPlan.")
+    if not isinstance(schema_summary, Mapping):
+        raise TypeError("schema_summary must be a mapping.")
+
+    validation_result = validate_analysis_plan(plan, schema_summary)
+    if not validation_result.valid:
+        raise PlanValidationError(validation_result.errors)
+
+    return ValidatedAnalysisPlan(
+        version=plan.version,
+        goal=plan.goal,
+        operations=plan.operations,
+        schema_columns=tuple(schema_summary["column_names"]),
+    )
