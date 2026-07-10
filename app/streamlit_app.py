@@ -6,6 +6,7 @@ import sys
 
 import pandas as pd
 import streamlit as st
+from plotly.graph_objects import Figure
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -15,8 +16,19 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.data.loader import CsvLoadError, load_csv
 from src.data.schema import build_schema_summary
 from src.agents.code_generator import generate_analysis_code
+from src.agents.insight_generator import (
+    InsightGenerationResult,
+    generate_insight,
+)
 from src.agents.plan_generator import generate_structured_plan
 from src.agents.planner import generate_analysis_plan
+from src.analysis.chart_generator import ChartGenerationError, generate_chart
+from src.analysis.profiler import (
+    AnalysisProfile,
+    build_aggregated_result_summary,
+    profile_analysis_result,
+)
+from src.analysis.visualization import VisualizationPlan, plan_visualization
 from src.llm.client import get_llm_config
 from src.runtime.code_guard import review_code_safety
 from src.runtime.executor import AnalysisResult, execute_analysis_plan
@@ -42,6 +54,11 @@ V5_STATE_DEFAULTS = {
     "v5_validated_plan": None,
     "v5_generation_error": "",
     "v5_dataset_identity": None,
+    "v5_analysis_profile": None,
+    "v5_visualization_plan": None,
+    "v5_chart": None,
+    "v5_chart_error": "",
+    "v5_insight_result": None,
 }
 
 
@@ -53,6 +70,15 @@ class V5PlanPreparation:
     validated_plan: ValidatedAnalysisPlan | None
     schema_signature: str
     error: str = ""
+
+
+@dataclass(frozen=True)
+class V52AnalysisReport:
+    profile: AnalysisProfile
+    visualization_plan: VisualizationPlan | None
+    chart: Figure | None
+    chart_error: str
+    insight_result: InsightGenerationResult
 
 
 def initialize_v5_session_state(state: MutableMapping) -> None:
@@ -68,9 +94,14 @@ def clear_v5_analysis_state(state: MutableMapping) -> None:
         "v5_execution_result",
         "v5_schema_signature",
         "v5_validated_plan",
+        "v5_analysis_profile",
+        "v5_visualization_plan",
+        "v5_chart",
+        "v5_insight_result",
     ):
         state[key] = None
     state["v5_generation_error"] = ""
+    state["v5_chart_error"] = ""
 
 
 def synchronize_v5_dataset_state(
@@ -210,9 +241,39 @@ def analysis_plan_to_dict(plan: AnalysisPlan) -> dict:
     }
 
 
+def build_v52_report(
+    dataframe: pd.DataFrame,
+    validated_plan: ValidatedAnalysisPlan,
+) -> V52AnalysisReport:
+    """Build profile, chart, and metadata-only insight after safe execution."""
+    profile = profile_analysis_result(dataframe)
+    visualization_plan = plan_visualization(profile, validated_plan)
+    chart = None
+    chart_error = ""
+    if visualization_plan is not None:
+        try:
+            chart = generate_chart(visualization_plan, dataframe)
+        except ChartGenerationError as exc:
+            chart_error = str(exc)
+
+    result_summary = build_aggregated_result_summary(dataframe, validated_plan)
+    insight_result = generate_insight(
+        profile,
+        result_summary,
+        visualization_plan,
+    )
+    return V52AnalysisReport(
+        profile=profile,
+        visualization_plan=visualization_plan,
+        chart=chart,
+        chart_error=chart_error,
+        insight_result=insight_result,
+    )
+
+
 def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.header("Project Stage")
-    st.sidebar.write("V5.1 Structured Plan Executor")
+    st.sidebar.write("V5.2 Visual Analysis Report")
 
     st.sidebar.header("Dataset Info")
     st.sidebar.write(f"Dataset Source: {dataset_source}")
@@ -227,7 +288,7 @@ def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.write(f"API Key: {api_key_status}")
 
     st.sidebar.header("Next Step")
-    st.sidebar.write("Current: validated operations execution")
+    st.sidebar.write("Current: safe execution, visualization, and insight")
 
 
 def render_schema_summary(summary: dict) -> None:
@@ -308,6 +369,36 @@ def render_v5_result(result: AnalysisResult | None) -> None:
         st.warning(warning)
 
 
+def render_v52_report(
+    profile: AnalysisProfile | None,
+    visualization_plan: VisualizationPlan | None,
+    chart: Figure | None,
+    chart_error: str,
+    insight_result: InsightGenerationResult | None,
+) -> None:
+    if profile is None:
+        return
+
+    with st.expander("View result profile metadata"):
+        st.json(profile.to_dict())
+
+    st.subheader("Visualization")
+    if chart is not None:
+        st.plotly_chart(chart, use_container_width=True)
+    elif chart_error:
+        st.warning(f"Visualization unavailable: {chart_error}")
+    elif visualization_plan is None:
+        st.info("No supported chart is suitable for this analysis result.")
+
+    st.subheader("AI Insight")
+    if insight_result is None:
+        st.info("No insight was generated.")
+    elif insight_result.success:
+        st.write(insight_result.insight)
+    else:
+        st.warning(f"AI insight unavailable: {insight_result.error}")
+
+
 def render_v5_workflow(dataframe: pd.DataFrame, summary: dict) -> None:
     initialize_v5_session_state(st.session_state)
     st.subheader("V5 Structured Analysis")
@@ -363,6 +454,14 @@ def render_v5_workflow(dataframe: pd.DataFrame, summary: dict) -> None:
     validated_plan = st.session_state["v5_validated_plan"]
     ready_to_execute = isinstance(validated_plan, ValidatedAnalysisPlan)
     if st.button("Run Analysis", disabled=not ready_to_execute):
+        for key in (
+            "v5_analysis_profile",
+            "v5_visualization_plan",
+            "v5_chart",
+            "v5_insight_result",
+        ):
+            st.session_state[key] = None
+        st.session_state["v5_chart_error"] = ""
         execution_result = execute_v5_plan(
             dataframe,
             validated_plan,
@@ -375,11 +474,29 @@ def render_v5_workflow(dataframe: pd.DataFrame, summary: dict) -> None:
                 False,
                 (execution_result.message,),
             )
+        elif execution_result.success and execution_result.dataframe is not None:
+            with st.spinner("Building visualization and insight..."):
+                report = build_v52_report(
+                    execution_result.dataframe,
+                    validated_plan,
+                )
+            st.session_state["v5_analysis_profile"] = report.profile
+            st.session_state["v5_visualization_plan"] = report.visualization_plan
+            st.session_state["v5_chart"] = report.chart
+            st.session_state["v5_chart_error"] = report.chart_error
+            st.session_state["v5_insight_result"] = report.insight_result
 
     if not ready_to_execute and plan is None:
         st.caption("Generate and validate a plan to enable Run Analysis.")
 
     render_v5_result(st.session_state["v5_execution_result"])
+    render_v52_report(
+        st.session_state["v5_analysis_profile"],
+        st.session_state["v5_visualization_plan"],
+        st.session_state["v5_chart"],
+        st.session_state["v5_chart_error"],
+        st.session_state["v5_insight_result"],
+    )
 
 
 def render_code_safety_review(code: str) -> None:
@@ -479,7 +596,7 @@ def main() -> None:
     st.title("Agentic Data Analyst Copilot")
     st.caption(
         "Upload a CSV dataset, inspect its schema, generate a structured plan, "
-        "and run allowlisted analysis operations."
+        "run allowlisted operations, and review a visual analysis report."
     )
 
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])

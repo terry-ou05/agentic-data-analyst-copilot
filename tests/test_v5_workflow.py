@@ -1,9 +1,16 @@
 import pandas as pd
 
 import app.streamlit_app as streamlit_app
+from src.agents.insight_generator import InsightGenerationResult
 from src.agents.plan_generator import PlanGenerationResult
+from src.analysis.chart_generator import ChartGenerationError
+from src.analysis.profiler import AggregatedResultSummary, AnalysisProfile
+from src.analysis.visualization import VisualizationPlan
 from src.data.schema import build_schema_summary
-from src.schemas.analysis_plan import parse_analysis_plan
+from src.schemas.analysis_plan import (
+    create_validated_analysis_plan,
+    parse_analysis_plan,
+)
 from src.utils.schema_signature import build_schema_signature
 
 
@@ -193,6 +200,21 @@ def test_v5_workflow_isolated_from_legacy_code_generator(monkeypatch) -> None:
     assert preparation.success is True
     assert result.success is True
 
+    monkeypatch.setattr(
+        streamlit_app,
+        "generate_insight",
+        lambda profile, summary, visualization: InsightGenerationResult(
+            success=True,
+            insight="Category B leads the result.",
+        ),
+    )
+    report = streamlit_app.build_v52_report(
+        result.dataframe,
+        preparation.validated_plan,
+    )
+
+    assert report.insight_result.success is True
+
 
 def test_new_dataset_clears_previous_v5_state() -> None:
     state = {}
@@ -205,6 +227,11 @@ def test_new_dataset_clears_previous_v5_state() -> None:
             "v5_schema_signature": "schema-a",
             "v5_validated_plan": object(),
             "v5_dataset_identity": "file-a",
+            "v5_analysis_profile": object(),
+            "v5_visualization_plan": object(),
+            "v5_chart": object(),
+            "v5_chart_error": "old error",
+            "v5_insight_result": object(),
         }
     )
 
@@ -221,6 +248,11 @@ def test_new_dataset_clears_previous_v5_state() -> None:
     assert state["v5_execution_result"] is None
     assert state["v5_schema_signature"] is None
     assert state["v5_validated_plan"] is None
+    assert state["v5_analysis_profile"] is None
+    assert state["v5_visualization_plan"] is None
+    assert state["v5_chart"] is None
+    assert state["v5_chart_error"] == ""
+    assert state["v5_insight_result"] is None
 
 
 def test_rerun_with_same_dataset_preserves_v5_state() -> None:
@@ -262,3 +294,142 @@ def test_schema_signature_changes_with_rows_columns_or_types() -> None:
         )
         != base_signature
     )
+
+
+def test_v52_report_chains_profile_chart_and_insight(monkeypatch) -> None:
+    dataframe = pd.DataFrame(
+        {"category": ["A", "B"], "total_revenue": [150, 200]}
+    )
+    validated_plan = create_validated_analysis_plan(
+        _valid_plan(),
+        {"column_names": ["category", "revenue"]},
+    )
+    monkeypatch.setattr(
+        streamlit_app,
+        "generate_insight",
+        lambda profile, summary, visualization: InsightGenerationResult(
+            success=True,
+            insight="Category B leads the aggregated result.",
+        ),
+    )
+
+    report = streamlit_app.build_v52_report(dataframe, validated_plan)
+
+    assert isinstance(report.profile, AnalysisProfile)
+    assert isinstance(report.visualization_plan, VisualizationPlan)
+    assert report.visualization_plan.chart_type.value == "bar"
+    assert report.chart is not None
+    assert report.chart_error == ""
+    assert report.insight_result.success is True
+
+
+def test_v52_report_passes_only_metadata_to_insight(monkeypatch) -> None:
+    dataframe = pd.DataFrame(
+        {"category": ["A", "B"], "total_revenue": [150, 200]}
+    )
+    validated_plan = create_validated_analysis_plan(
+        _valid_plan(),
+        {"column_names": ["category", "revenue"]},
+    )
+    captured = {}
+
+    def fake_insight(profile, summary, visualization):
+        captured["profile"] = profile
+        captured["summary"] = summary
+        captured["visualization"] = visualization
+        return InsightGenerationResult(success=True, insight="Metadata-only insight.")
+
+    monkeypatch.setattr(streamlit_app, "generate_insight", fake_insight)
+
+    streamlit_app.build_v52_report(dataframe, validated_plan)
+
+    assert isinstance(captured["profile"], AnalysisProfile)
+    assert isinstance(captured["summary"], AggregatedResultSummary)
+    assert isinstance(captured["visualization"], VisualizationPlan)
+    assert not isinstance(captured["profile"], pd.DataFrame)
+    assert not isinstance(captured["summary"], pd.DataFrame)
+
+
+def test_non_aggregate_report_withholds_rows_from_insight(monkeypatch) -> None:
+    dataframe = pd.DataFrame(
+        {"customer_name": ["Sensitive Person"], "revenue": [100]}
+    )
+    plan = parse_analysis_plan(
+        {
+            "version": "1.0",
+            "goal": "Rank revenue",
+            "operations": [
+                {
+                    "operation": "top_n",
+                    "sort_by": "revenue",
+                    "n": 1,
+                    "ascending": False,
+                }
+            ],
+        }
+    )
+    validated_plan = create_validated_analysis_plan(
+        plan,
+        {"column_names": ["customer_name", "revenue"]},
+    )
+
+    def fake_insight(profile, summary, visualization):
+        assert summary.is_aggregated is False
+        assert summary.rows == ()
+        assert "Sensitive Person" not in str(summary.to_dict())
+        return InsightGenerationResult(success=True, insight="Profile-only insight.")
+
+    monkeypatch.setattr(streamlit_app, "generate_insight", fake_insight)
+
+    report = streamlit_app.build_v52_report(dataframe, validated_plan)
+
+    assert report.insight_result.success is True
+
+
+def test_chart_failure_does_not_block_insight(monkeypatch) -> None:
+    dataframe = pd.DataFrame(
+        {"category": ["A", "B"], "total_revenue": [150, 200]}
+    )
+    validated_plan = create_validated_analysis_plan(
+        _valid_plan(),
+        {"column_names": ["category", "revenue"]},
+    )
+
+    def fail_chart(plan, result_dataframe):
+        raise ChartGenerationError("CHART_FAILED", "Chart could not be generated.")
+
+    monkeypatch.setattr(streamlit_app, "generate_chart", fail_chart)
+    monkeypatch.setattr(
+        streamlit_app,
+        "generate_insight",
+        lambda profile, summary, visualization: InsightGenerationResult(
+            success=True,
+            insight="Insight remains available.",
+        ),
+    )
+
+    report = streamlit_app.build_v52_report(dataframe, validated_plan)
+
+    assert report.chart is None
+    assert report.chart_error == "Chart could not be generated."
+    assert report.insight_result.success is True
+
+
+def test_empty_report_returns_no_chart_and_structured_insight_failure() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "category": pd.Series(dtype="object"),
+            "total_revenue": pd.Series(dtype="float64"),
+        }
+    )
+    validated_plan = create_validated_analysis_plan(
+        _valid_plan(),
+        {"column_names": ["category", "revenue"]},
+    )
+
+    report = streamlit_app.build_v52_report(dataframe, validated_plan)
+
+    assert report.profile.empty is True
+    assert report.visualization_plan is None
+    assert report.chart is None
+    assert report.insight_result.error_code == "EMPTY_RESULT"
