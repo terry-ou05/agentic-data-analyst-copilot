@@ -163,3 +163,64 @@ Output requirements:
 - Do not compute or claim a final business answer in comments.
 - Keep the code preview concise and focused on pandas transformations and optional plotly.express visualization.
 """.strip()
+
+
+def build_structured_analysis_plan_prompt(
+    schema_summary: dict,
+    user_question: str,
+) -> str:
+    """Build the V5.1 JSON-only structured analysis plan prompt."""
+    schema_table = schema_summary["schema_table"].to_string(index=False)
+    valid_columns = "\n".join(
+        f"- {column_name}" for column_name in schema_summary["column_names"]
+    )
+
+    return f"""
+Create one structured analysis plan for the user's question.
+
+Return exactly one JSON object. Do not return Markdown, explanations, Python,
+pandas code, SQL, function calls, or arbitrary operations.
+
+The only allowed operation names are:
+- filter
+- groupby
+- aggregate
+- top_n
+
+Valid dataset columns:
+{valid_columns}
+
+Schema table:
+{schema_table}
+
+User question:
+{user_question}
+
+Required top-level JSON fields:
+- version: must be "1.0"
+- goal: non-empty string
+- operations: ordered list of operation objects
+
+Operation contracts:
+
+filter:
+{{"operation":"filter","column":"<existing column>","operator":"eq|ne|gt|gte|lt|lte|in|not_in","value":<JSON scalar or scalar list>}}
+
+groupby:
+{{"operation":"groupby","columns":["<existing column>"]}}
+
+aggregate:
+{{"operation":"aggregate","metrics":[{{"column":"<existing column>","function":"sum|mean|min|max|count","alias":"<new result column>"}}]}}
+
+top_n:
+{{"operation":"top_n","sort_by":"<existing or aggregate result column>","n":<integer 1 to 100>,"ascending":<boolean>}}
+
+Required operation order:
+- zero or more filter operations first
+- optional groupby
+- optional aggregate; groupby requires aggregate
+- optional top_n last
+
+Do not invent columns. Do not add unknown JSON fields. Do not attempt joins,
+forecasting, custom formulas, visualization code, file access, or network access.
+""".strip()
