@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.data.loader import CsvLoadError
 from src.data.schema import build_schema_summary
 from src.connectors.csv_connector import CsvConnector
+from src.connectors.sqlite_connector import SQLiteConnector, SQLiteConnectorError
 from src.agents.code_generator import generate_analysis_code
 from src.agents.insight_generator import (
     InsightGenerationResult,
@@ -46,6 +47,7 @@ from src.utils.schema_signature import build_schema_signature
 
 
 SAMPLE_DATASET = PROJECT_ROOT / "data" / "samples" / "sales_demo.csv"
+SAMPLE_SQLITE_DATABASE = PROJECT_ROOT / "data" / "demo_sales.db"
 
 V5_STATE_DEFAULTS = {
     "v5_plan": None,
@@ -269,6 +271,19 @@ def build_v52_report(
         chart=chart,
         chart_error=chart_error,
         insight_result=insight_result,
+    )
+
+
+def build_sqlite_dataset_identity(database_path: str, table_name: str) -> str:
+    """Bind V5 state to a selected SQLite table and its current file metadata."""
+    try:
+        resolved_path = Path(database_path).expanduser().resolve(strict=True)
+        file_status = resolved_path.stat()
+    except (OSError, RuntimeError):
+        return f"sqlite:{database_path}:{table_name}"
+    return (
+        f"sqlite:{resolved_path}:{table_name}:"
+        f"{file_status.st_size}:{file_status.st_mtime_ns}"
     )
 
 
@@ -596,32 +611,69 @@ def main() -> None:
 
     st.title("Agentic Data Analyst Copilot")
     st.caption(
-        "Upload a CSV dataset, inspect its schema, generate a structured plan, "
-        "run allowlisted operations, and review a visual analysis report."
+        "Select a CSV or SQLite dataset, inspect its schema, generate a "
+        "structured plan, and review a visual analysis report."
     )
 
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+    data_source = st.radio(
+        "Data Source",
+        ("CSV Upload", "SQLite Database"),
+        horizontal=True,
+    )
 
-    try:
-        if uploaded_file is None:
-            st.info("No file uploaded. Loading the sample dataset.")
-            connector = CsvConnector(SAMPLE_DATASET)
+    if data_source == "CSV Upload":
+        uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+        try:
+            if uploaded_file is None:
+                st.info("No file uploaded. Loading the sample dataset.")
+                connector = CsvConnector(SAMPLE_DATASET)
+                dataframe = connector.load()
+                dataset_name = SAMPLE_DATASET.name
+                dataset_source = "Sample CSV"
+                dataset_identity = "sample-dataset"
+            else:
+                connector = CsvConnector(uploaded_file)
+                dataframe = connector.load()
+                dataset_name = uploaded_file.name
+                dataset_source = "Uploaded CSV"
+                raw_upload = uploaded_file.getvalue()
+                if isinstance(raw_upload, memoryview):
+                    raw_upload = raw_upload.tobytes()
+                dataset_identity = "uploaded:" + hashlib.sha256(raw_upload).hexdigest()
+        except CsvLoadError as exc:
+            st.error(str(exc))
+            st.stop()
+    else:
+        sqlite_path = st.text_input(
+            "SQLite database path",
+            value=str(SAMPLE_SQLITE_DATABASE),
+            help="Enter a local SQLite database path. The connector opens it read-only.",
+        ).strip()
+        if not sqlite_path:
+            st.info("Enter a SQLite database path to continue.")
+            st.stop()
+        try:
+            available_tables = SQLiteConnector(sqlite_path).list_tables()
+        except SQLiteConnectorError as exc:
+            st.error(str(exc))
+            st.stop()
+        if not available_tables:
+            st.warning("The selected SQLite database does not contain user tables.")
+            st.stop()
+
+        selected_table = st.selectbox("SQLite table", available_tables)
+        try:
+            connector = SQLiteConnector(sqlite_path, selected_table)
             dataframe = connector.load()
-            dataset_name = SAMPLE_DATASET.name
-            dataset_source = "Sample CSV"
-            dataset_identity = "sample-dataset"
-        else:
-            connector = CsvConnector(uploaded_file)
-            dataframe = connector.load()
-            dataset_name = uploaded_file.name
-            dataset_source = "Uploaded CSV"
-            raw_upload = uploaded_file.getvalue()
-            if isinstance(raw_upload, memoryview):
-                raw_upload = raw_upload.tobytes()
-            dataset_identity = "uploaded:" + hashlib.sha256(raw_upload).hexdigest()
-    except CsvLoadError as exc:
-        st.error(str(exc))
-        st.stop()
+            dataset_name = f"{Path(sqlite_path).name} / {selected_table}"
+            dataset_source = "SQLite Database"
+            dataset_identity = build_sqlite_dataset_identity(
+                sqlite_path,
+                selected_table,
+            )
+        except SQLiteConnectorError as exc:
+            st.error(str(exc))
+            st.stop()
 
     summary = connector.get_schema()
     current_schema_signature = build_schema_signature(summary)
