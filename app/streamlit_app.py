@@ -1,6 +1,10 @@
+import hashlib
+from collections.abc import MutableMapping
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 
+import pandas as pd
 import streamlit as st
 
 
@@ -11,17 +15,204 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.data.loader import CsvLoadError, load_csv
 from src.data.schema import build_schema_summary
 from src.agents.code_generator import generate_analysis_code
+from src.agents.plan_generator import generate_structured_plan
 from src.agents.planner import generate_analysis_plan
 from src.llm.client import get_llm_config
 from src.runtime.code_guard import review_code_safety
+from src.runtime.executor import AnalysisResult, execute_analysis_plan
+from src.schemas.analysis_plan import (
+    AnalysisPlan,
+    OperationType,
+    PlanValidationError,
+    ValidatedAnalysisPlan,
+    ValidationResult,
+    create_validated_analysis_plan,
+    validate_analysis_plan,
+)
+from src.utils.schema_signature import build_schema_signature
 
 
 SAMPLE_DATASET = PROJECT_ROOT / "data" / "samples" / "sales_demo.csv"
 
+V5_STATE_DEFAULTS = {
+    "v5_plan": None,
+    "v5_validation_result": None,
+    "v5_execution_result": None,
+    "v5_schema_signature": None,
+    "v5_validated_plan": None,
+    "v5_generation_error": "",
+    "v5_dataset_identity": None,
+}
+
+
+@dataclass(frozen=True)
+class V5PlanPreparation:
+    success: bool
+    plan: AnalysisPlan | None
+    validation_result: ValidationResult | None
+    validated_plan: ValidatedAnalysisPlan | None
+    schema_signature: str
+    error: str = ""
+
+
+def initialize_v5_session_state(state: MutableMapping) -> None:
+    for key, default_value in V5_STATE_DEFAULTS.items():
+        if key not in state:
+            state[key] = default_value
+
+
+def clear_v5_analysis_state(state: MutableMapping) -> None:
+    for key in (
+        "v5_plan",
+        "v5_validation_result",
+        "v5_execution_result",
+        "v5_schema_signature",
+        "v5_validated_plan",
+    ):
+        state[key] = None
+    state["v5_generation_error"] = ""
+
+
+def synchronize_v5_dataset_state(
+    state: MutableMapping,
+    dataset_identity: str,
+    current_schema_signature: str,
+) -> bool:
+    """Clear prior V5 state when the file or its bound schema changes."""
+    initialize_v5_session_state(state)
+    existing_identity = state.get("v5_dataset_identity")
+    bound_signature = state.get("v5_schema_signature")
+    dataset_changed = (
+        existing_identity is not None and existing_identity != dataset_identity
+    )
+    schema_changed = (
+        bound_signature is not None
+        and bound_signature != current_schema_signature
+    )
+
+    if dataset_changed or schema_changed:
+        clear_v5_analysis_state(state)
+
+    state["v5_dataset_identity"] = dataset_identity
+    return dataset_changed or schema_changed
+
+
+def prepare_v5_plan(
+    schema_summary: dict,
+    user_question: str,
+) -> V5PlanPreparation:
+    """Generate and independently validate a V5 structured analysis plan."""
+    schema_signature = build_schema_signature(schema_summary)
+    generation_result = generate_structured_plan(schema_summary, user_question)
+    if not generation_result.success:
+        validation_result = (
+            ValidationResult(False, generation_result.validation_errors)
+            if generation_result.validation_errors
+            else None
+        )
+        return V5PlanPreparation(
+            success=False,
+            plan=None,
+            validation_result=validation_result,
+            validated_plan=None,
+            schema_signature=schema_signature,
+            error=generation_result.error,
+        )
+    if generation_result.plan is None:
+        return V5PlanPreparation(
+            success=False,
+            plan=None,
+            validation_result=None,
+            validated_plan=None,
+            schema_signature=schema_signature,
+            error="Structured plan generation returned no plan.",
+        )
+
+    plan = generation_result.plan
+    validation_result = validate_analysis_plan(plan, schema_summary)
+    if not validation_result.valid:
+        return V5PlanPreparation(
+            success=False,
+            plan=plan,
+            validation_result=validation_result,
+            validated_plan=None,
+            schema_signature=schema_signature,
+            error="Structured analysis plan validation failed.",
+        )
+
+    try:
+        validated_plan = create_validated_analysis_plan(plan, schema_summary)
+    except PlanValidationError as exc:
+        return V5PlanPreparation(
+            success=False,
+            plan=plan,
+            validation_result=ValidationResult(False, exc.errors),
+            validated_plan=None,
+            schema_signature=schema_signature,
+            error="Structured analysis plan validation failed.",
+        )
+
+    return V5PlanPreparation(
+        success=True,
+        plan=plan,
+        validation_result=validation_result,
+        validated_plan=validated_plan,
+        schema_signature=schema_signature,
+    )
+
+
+def execute_v5_plan(
+    dataframe: pd.DataFrame,
+    validated_plan: ValidatedAnalysisPlan | None,
+    expected_schema_signature: str | None,
+) -> AnalysisResult:
+    """Reject stale plans before calling the trusted V5 executor."""
+    input_rows = len(dataframe) if isinstance(dataframe, pd.DataFrame) else 0
+    if not isinstance(validated_plan, ValidatedAnalysisPlan):
+        return AnalysisResult(
+            success=False,
+            dataframe=None,
+            error_code="INVALID_PLAN_TYPE",
+            message="Generate and validate a structured plan before running analysis.",
+            executed_operations=(),
+            input_rows=input_rows,
+            output_rows=0,
+            warnings=(),
+        )
+
+    current_signature = build_schema_signature(build_schema_summary(dataframe))
+    if not expected_schema_signature or current_signature != expected_schema_signature:
+        return AnalysisResult(
+            success=False,
+            dataframe=None,
+            error_code="SCHEMA_CHANGED",
+            message="Dataset changed. Please regenerate analysis plan.",
+            executed_operations=(),
+            input_rows=input_rows,
+            output_rows=0,
+            warnings=(),
+        )
+
+    return execute_analysis_plan(dataframe, validated_plan)
+
+
+def analysis_plan_to_dict(plan: AnalysisPlan) -> dict:
+    return {
+        "version": plan.version,
+        "goal": plan.goal,
+        "operations": [
+            {
+                "operation": operation.operation_type.value,
+                **dict(operation.parameters),
+            }
+            for operation in plan.operations
+        ],
+    }
+
 
 def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.header("Project Stage")
-    st.sidebar.write("V4 Code Safety Guard")
+    st.sidebar.write("V5.1 Structured Plan Executor")
 
     st.sidebar.header("Dataset Info")
     st.sidebar.write(f"Dataset Source: {dataset_source}")
@@ -36,11 +227,159 @@ def render_sidebar(summary: dict, dataset_source: str) -> None:
     st.sidebar.write(f"API Key: {api_key_status}")
 
     st.sidebar.header("Next Step")
-    st.sidebar.write("Future: reviewed execution path")
+    st.sidebar.write("Current: validated operations execution")
 
 
 def render_schema_summary(summary: dict) -> None:
     st.dataframe(summary["schema_table"], use_container_width=True)
+
+
+def render_structured_plan(plan: AnalysisPlan) -> None:
+    st.subheader("Structured Plan Preview")
+    st.write("Analysis Goal:")
+    st.write(plan.goal)
+    st.write("Operations:")
+
+    for index, operation in enumerate(plan.operations, start=1):
+        parameters = operation.parameters
+        with st.container(border=True):
+            if operation.operation_type is OperationType.FILTER:
+                st.write(f"{index}. Filter")
+                st.write(
+                    f"{parameters['column']} {parameters['operator']} "
+                    f"{parameters['value']!r}"
+                )
+            elif operation.operation_type is OperationType.GROUPBY:
+                st.write(f"{index}. Group By")
+                st.write(", ".join(parameters["columns"]))
+            elif operation.operation_type is OperationType.AGGREGATE:
+                st.write(f"{index}. Aggregate")
+                for metric in parameters["metrics"]:
+                    st.write(
+                        f"{metric['column']} ({metric['function']}) "
+                        f"as {metric['alias']}"
+                    )
+            elif operation.operation_type is OperationType.TOP_N:
+                st.write(f"{index}. Top N")
+                direction = "ascending" if parameters["ascending"] else "descending"
+                st.write(
+                    f"Top {parameters['n']} by {parameters['sort_by']} ({direction})"
+                )
+
+    with st.expander("View structured plan JSON"):
+        st.json(analysis_plan_to_dict(plan))
+
+
+def render_v5_validation(validation_result: ValidationResult | None) -> None:
+    if validation_result is None:
+        return
+
+    st.subheader("Validation Status")
+    if validation_result.valid:
+        st.success("✓ Plan validated")
+        st.success("✓ Schema verified")
+        st.success("✓ Operations allowed")
+        st.info("Ready to execute")
+        return
+
+    st.error("Plan validation failed.")
+    for error in validation_result.errors:
+        st.warning(error)
+
+
+def render_v5_result(result: AnalysisResult | None) -> None:
+    if result is None:
+        return
+
+    st.subheader("Analysis Result")
+    if not result.success or result.dataframe is None:
+        st.error(result.message)
+        return
+
+    st.dataframe(result.dataframe, use_container_width=True)
+    st.write("Result Metadata")
+    input_col, output_col = st.columns(2)
+    input_col.metric("Input rows", result.input_rows)
+    output_col.metric("Output rows", result.output_rows)
+    st.write("Executed operations:")
+    for operation_name in result.executed_operations:
+        st.write(f"- {operation_name}")
+    for warning in result.warnings:
+        st.warning(warning)
+
+
+def render_v5_workflow(dataframe: pd.DataFrame, summary: dict) -> None:
+    initialize_v5_session_state(st.session_state)
+    st.subheader("V5 Structured Analysis")
+    st.write(
+        "Generate a schema-bound structured plan and run only trusted pandas "
+        "operations. No generated Python is executed."
+    )
+
+    if summary["number_of_rows"] == 0:
+        st.warning(
+            "This CSV contains column headers but no data rows. "
+            "Add data rows before generating a structured plan."
+        )
+        return
+
+    user_question = st.text_area(
+        "V5 business question",
+        placeholder="Example: Which category has the highest online revenue?",
+        height=100,
+        key="v5_business_question",
+    )
+
+    if st.button("Generate Structured Plan", type="primary"):
+        clear_v5_analysis_state(st.session_state)
+        if not user_question.strip():
+            st.session_state["v5_generation_error"] = (
+                "Enter a business question before generating a structured plan."
+            )
+        else:
+            with st.spinner("Generating structured plan..."):
+                preparation = prepare_v5_plan(summary, user_question.strip())
+            st.session_state["v5_plan"] = preparation.plan
+            st.session_state["v5_validation_result"] = (
+                preparation.validation_result
+            )
+            st.session_state["v5_validated_plan"] = preparation.validated_plan
+            st.session_state["v5_schema_signature"] = (
+                preparation.schema_signature if preparation.plan is not None else None
+            )
+            st.session_state["v5_generation_error"] = preparation.error
+
+    generation_error = st.session_state["v5_generation_error"]
+    if generation_error:
+        st.error(generation_error)
+
+    plan = st.session_state["v5_plan"]
+    if isinstance(plan, AnalysisPlan):
+        render_structured_plan(plan)
+
+    validation_result = st.session_state["v5_validation_result"]
+    render_v5_validation(validation_result)
+
+    validated_plan = st.session_state["v5_validated_plan"]
+    ready_to_execute = isinstance(validated_plan, ValidatedAnalysisPlan)
+    if st.button("Run Analysis", disabled=not ready_to_execute):
+        execution_result = execute_v5_plan(
+            dataframe,
+            validated_plan,
+            st.session_state["v5_schema_signature"],
+        )
+        st.session_state["v5_execution_result"] = execution_result
+        if execution_result.error_code == "SCHEMA_CHANGED":
+            st.session_state["v5_validated_plan"] = None
+            st.session_state["v5_validation_result"] = ValidationResult(
+                False,
+                (execution_result.message,),
+            )
+
+    if not ready_to_execute and plan is None:
+        st.caption("Generate and validate a plan to enable Run Analysis.")
+
+    render_v5_result(st.session_state["v5_execution_result"])
 
 
 def render_code_safety_review(code: str) -> None:
@@ -139,8 +478,8 @@ def main() -> None:
 
     st.title("Agentic Data Analyst Copilot")
     st.caption(
-        "Upload a CSV dataset, inspect its schema, and prepare it for future "
-        "agentic analysis workflows."
+        "Upload a CSV dataset, inspect its schema, generate a structured plan, "
+        "and run allowlisted analysis operations."
     )
 
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
@@ -151,15 +490,26 @@ def main() -> None:
             dataframe = load_csv(SAMPLE_DATASET)
             dataset_name = SAMPLE_DATASET.name
             dataset_source = "Sample CSV"
+            dataset_identity = "sample-dataset"
         else:
             dataframe = load_csv(uploaded_file)
             dataset_name = uploaded_file.name
             dataset_source = "Uploaded CSV"
+            raw_upload = uploaded_file.getvalue()
+            if isinstance(raw_upload, memoryview):
+                raw_upload = raw_upload.tobytes()
+            dataset_identity = "uploaded:" + hashlib.sha256(raw_upload).hexdigest()
     except CsvLoadError as exc:
         st.error(str(exc))
         st.stop()
 
     summary = build_schema_summary(dataframe)
+    current_schema_signature = build_schema_signature(summary)
+    dataset_state_reset = synchronize_v5_dataset_state(
+        st.session_state,
+        dataset_identity,
+        current_schema_signature,
+    )
     render_sidebar(summary, dataset_source)
 
     st.subheader(f"Dataset: {dataset_name}")
@@ -175,7 +525,13 @@ def main() -> None:
     st.subheader("Schema Summary")
     render_schema_summary(summary)
 
-    render_analysis_planner(summary)
+    if dataset_state_reset:
+        st.info("Dataset changed. Generate a new structured analysis plan.")
+
+    render_v5_workflow(dataframe, summary)
+
+    with st.expander("V4 Legacy Code Preview", expanded=False):
+        render_analysis_planner(summary)
 
 
 if __name__ == "__main__":
