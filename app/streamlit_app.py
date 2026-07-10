@@ -13,8 +13,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.data.loader import CsvLoadError, load_csv
+from src.data.loader import CsvLoadError
 from src.data.schema import build_schema_summary
+from src.connectors.csv_connector import CsvConnector
 from src.agents.code_generator import generate_analysis_code
 from src.agents.insight_generator import (
     InsightGenerationResult,
@@ -604,12 +605,14 @@ def main() -> None:
     try:
         if uploaded_file is None:
             st.info("No file uploaded. Loading the sample dataset.")
-            dataframe = load_csv(SAMPLE_DATASET)
+            connector = CsvConnector(SAMPLE_DATASET)
+            dataframe = connector.load()
             dataset_name = SAMPLE_DATASET.name
             dataset_source = "Sample CSV"
             dataset_identity = "sample-dataset"
         else:
-            dataframe = load_csv(uploaded_file)
+            connector = CsvConnector(uploaded_file)
+            dataframe = connector.load()
             dataset_name = uploaded_file.name
             dataset_source = "Uploaded CSV"
             raw_upload = uploaded_file.getvalue()
@@ -620,7 +623,7 @@ def main() -> None:
         st.error(str(exc))
         st.stop()
 
-    summary = build_schema_summary(dataframe)
+    summary = connector.get_schema()
     current_schema_signature = build_schema_signature(summary)
     dataset_state_reset = synchronize_v5_dataset_state(
         st.session_state,
