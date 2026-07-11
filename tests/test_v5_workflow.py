@@ -1,12 +1,18 @@
+import json
+
 import pandas as pd
+import pytest
 
 import app.streamlit_app as streamlit_app
+from src.agents import capability_guard
 from src.agents.insight_generator import InsightGenerationResult
+from src.agents.capability_guard import Capability, CapabilityCheckResult
 from src.agents.plan_generator import PlanGenerationResult
 from src.analysis.chart_generator import ChartGenerationError
 from src.analysis.profiler import AggregatedResultSummary, AnalysisProfile
 from src.analysis.visualization import VisualizationPlan
 from src.data.schema import build_schema_summary
+from src.llm.client import LLMResult
 from src.schemas.analysis_plan import (
     create_validated_analysis_plan,
     parse_analysis_plan,
@@ -48,6 +54,24 @@ def _dataframe() -> pd.DataFrame:
             "category": ["A", "B", "A"],
             "revenue": [100, 200, 50],
         }
+    )
+
+
+def _allowed_capability_result() -> CapabilityCheckResult:
+    return CapabilityCheckResult(
+        allowed=True,
+        capability=Capability.RANKING,
+        plan_matches_intent=True,
+        message="Request capability and generated plan are compatible.",
+    )
+
+
+@pytest.fixture(autouse=True)
+def mock_capability_guard(monkeypatch) -> None:
+    monkeypatch.setattr(
+        streamlit_app,
+        "check_capability_boundary",
+        lambda question, plan: _allowed_capability_result(),
     )
 
 
@@ -129,6 +153,80 @@ def test_invalid_plan_cannot_reach_executor(monkeypatch) -> None:
     monkeypatch.setattr(streamlit_app, "execute_analysis_plan", fail_if_called)
     result = streamlit_app.execute_v5_plan(
         dataframe,
+        preparation.validated_plan,
+        preparation.schema_signature,
+    )
+
+    assert result.success is False
+    assert result.error_code == "INVALID_PLAN_TYPE"
+
+
+@pytest.mark.parametrize(
+    ("question", "capability"),
+    [
+        ("Predict next year's revenue.", Capability.FORECASTING),
+        ("Delete all database records.", Capability.DELETION),
+    ],
+)
+def test_unsupported_request_cannot_reach_validator_or_executor(
+    monkeypatch,
+    question,
+    capability,
+) -> None:
+    summary = build_schema_summary(_dataframe())
+    monkeypatch.setattr(
+        streamlit_app,
+        "generate_structured_plan",
+        lambda schema_summary, user_question: PlanGenerationResult(
+            success=True,
+            plan=_valid_plan(),
+        ),
+    )
+    monkeypatch.setattr(
+        streamlit_app,
+        "check_capability_boundary",
+        capability_guard.check_capability_boundary,
+    )
+    monkeypatch.setattr(
+        capability_guard,
+        "generate_chat_completion",
+        lambda messages: LLMResult(
+            success=True,
+            content=json.dumps(
+                {
+                    "capability": capability.value,
+                    "plan_matches_intent": False,
+                    "reason": "Mocked unsupported capability assessment.",
+                }
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        streamlit_app,
+        "validate_analysis_plan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Schema validation must not run after guard rejection")
+        ),
+    )
+
+    preparation = streamlit_app.prepare_v5_plan(summary, question)
+
+    assert preparation.success is False
+    assert preparation.plan is None
+    assert preparation.validation_result is None
+    assert preparation.validated_plan is None
+    assert preparation.capability_result is not None
+    assert preparation.capability_result.capability is capability
+
+    monkeypatch.setattr(
+        streamlit_app,
+        "execute_analysis_plan",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Executor must not run an unsupported request")
+        ),
+    )
+    result = streamlit_app.execute_v5_plan(
+        _dataframe(),
         preparation.validated_plan,
         preparation.schema_signature,
     )
@@ -222,6 +320,7 @@ def test_new_dataset_clears_previous_v5_state() -> None:
     state.update(
         {
             "v5_plan": _valid_plan(),
+            "v5_capability_check_result": _allowed_capability_result(),
             "v5_validation_result": object(),
             "v5_execution_result": object(),
             "v5_schema_signature": "schema-a",
@@ -244,6 +343,7 @@ def test_new_dataset_clears_previous_v5_state() -> None:
     assert changed is True
     assert state["v5_dataset_identity"] == "file-b"
     assert state["v5_plan"] is None
+    assert state["v5_capability_check_result"] is None
     assert state["v5_validation_result"] is None
     assert state["v5_execution_result"] is None
     assert state["v5_schema_signature"] is None

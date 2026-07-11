@@ -23,6 +23,10 @@ from src.agents.insight_generator import (
     generate_insight,
 )
 from src.agents.plan_generator import generate_structured_plan
+from src.agents.capability_guard import (
+    CapabilityCheckResult,
+    check_capability_boundary,
+)
 from src.agents.planner import generate_analysis_plan
 from src.analysis.chart_generator import ChartGenerationError, generate_chart
 from src.analysis.profiler import (
@@ -52,6 +56,7 @@ SAMPLE_SQLITE_DATABASE = PROJECT_ROOT / "data" / "demo_sales.db"
 V5_STATE_DEFAULTS = {
     "v5_plan": None,
     "v5_validation_result": None,
+    "v5_capability_check_result": None,
     "v5_execution_result": None,
     "v5_schema_signature": None,
     "v5_validated_plan": None,
@@ -69,6 +74,7 @@ V5_STATE_DEFAULTS = {
 class V5PlanPreparation:
     success: bool
     plan: AnalysisPlan | None
+    capability_result: CapabilityCheckResult | None
     validation_result: ValidationResult | None
     validated_plan: ValidatedAnalysisPlan | None
     schema_signature: str
@@ -94,6 +100,7 @@ def clear_v5_analysis_state(state: MutableMapping) -> None:
     for key in (
         "v5_plan",
         "v5_validation_result",
+        "v5_capability_check_result",
         "v5_execution_result",
         "v5_schema_signature",
         "v5_validated_plan",
@@ -135,7 +142,7 @@ def prepare_v5_plan(
     schema_summary: dict,
     user_question: str,
 ) -> V5PlanPreparation:
-    """Generate and independently validate a V5 structured analysis plan."""
+    """Generate, capability-check, and validate a V5 structured analysis plan."""
     schema_signature = build_schema_signature(schema_summary)
     generation_result = generate_structured_plan(schema_summary, user_question)
     if not generation_result.success:
@@ -147,6 +154,7 @@ def prepare_v5_plan(
         return V5PlanPreparation(
             success=False,
             plan=None,
+            capability_result=None,
             validation_result=validation_result,
             validated_plan=None,
             schema_signature=schema_signature,
@@ -156,6 +164,7 @@ def prepare_v5_plan(
         return V5PlanPreparation(
             success=False,
             plan=None,
+            capability_result=None,
             validation_result=None,
             validated_plan=None,
             schema_signature=schema_signature,
@@ -163,11 +172,24 @@ def prepare_v5_plan(
         )
 
     plan = generation_result.plan
+    capability_result = check_capability_boundary(user_question, plan)
+    if not capability_result.allowed:
+        return V5PlanPreparation(
+            success=False,
+            plan=None,
+            capability_result=capability_result,
+            validation_result=None,
+            validated_plan=None,
+            schema_signature=schema_signature,
+            error="",
+        )
+
     validation_result = validate_analysis_plan(plan, schema_summary)
     if not validation_result.valid:
         return V5PlanPreparation(
             success=False,
             plan=plan,
+            capability_result=capability_result,
             validation_result=validation_result,
             validated_plan=None,
             schema_signature=schema_signature,
@@ -180,6 +202,7 @@ def prepare_v5_plan(
         return V5PlanPreparation(
             success=False,
             plan=plan,
+            capability_result=capability_result,
             validation_result=ValidationResult(False, exc.errors),
             validated_plan=None,
             schema_signature=schema_signature,
@@ -189,6 +212,7 @@ def prepare_v5_plan(
     return V5PlanPreparation(
         success=True,
         plan=plan,
+        capability_result=capability_result,
         validation_result=validation_result,
         validated_plan=validated_plan,
         schema_signature=schema_signature,
@@ -364,6 +388,20 @@ def render_v5_validation(validation_result: ValidationResult | None) -> None:
         st.warning(error)
 
 
+def render_capability_check(result: CapabilityCheckResult | None) -> None:
+    if result is None:
+        return
+
+    st.subheader("Capability Boundary")
+    if result.allowed:
+        st.success("Request capability verified")
+        return
+
+    st.error(result.message)
+    for error in result.errors:
+        st.warning(error)
+
+
 def render_v5_result(result: AnalysisResult | None) -> None:
     if result is None:
         return
@@ -447,6 +485,9 @@ def render_v5_workflow(dataframe: pd.DataFrame, summary: dict) -> None:
             with st.spinner("Generating structured plan..."):
                 preparation = prepare_v5_plan(summary, user_question.strip())
             st.session_state["v5_plan"] = preparation.plan
+            st.session_state["v5_capability_check_result"] = (
+                preparation.capability_result
+            )
             st.session_state["v5_validation_result"] = (
                 preparation.validation_result
             )
@@ -461,6 +502,7 @@ def render_v5_workflow(dataframe: pd.DataFrame, summary: dict) -> None:
         st.error(generation_error)
 
     plan = st.session_state["v5_plan"]
+    render_capability_check(st.session_state["v5_capability_check_result"])
     if isinstance(plan, AnalysisPlan):
         render_structured_plan(plan)
 

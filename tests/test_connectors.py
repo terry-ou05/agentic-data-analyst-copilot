@@ -7,6 +7,7 @@ import pytest
 import app.streamlit_app as streamlit_app
 import src.connectors.csv_connector as csv_connector_module
 from src.agents.plan_generator import PlanGenerationResult
+from src.agents.capability_guard import Capability, CapabilityCheckResult
 from src.connectors.base import DataConnector
 from src.connectors.csv_connector import CsvConnector
 from src.data.loader import CsvLoadError
@@ -134,6 +135,16 @@ def test_connector_dataframe_still_runs_v5_workflow(monkeypatch) -> None:
         streamlit_app,
         "generate_structured_plan",
         lambda summary, question: PlanGenerationResult(success=True, plan=_valid_plan()),
+    )
+    monkeypatch.setattr(
+        streamlit_app,
+        "check_capability_boundary",
+        lambda question, plan: CapabilityCheckResult(
+            allowed=True,
+            capability=Capability.RANKING,
+            plan_matches_intent=True,
+            message="Request capability and generated plan are compatible.",
+        ),
     )
 
     preparation = streamlit_app.prepare_v5_plan(schema_summary, "Rank categories")

@@ -8,6 +8,7 @@ import pytest
 
 import app.streamlit_app as streamlit_app
 from src.agents.plan_generator import PlanGenerationResult
+from src.agents.capability_guard import Capability, CapabilityCheckResult
 from src.connectors import DataConnector, SQLiteConnector, SQLiteConnectorError
 from src.schemas.analysis_plan import parse_analysis_plan
 
@@ -158,6 +159,16 @@ def test_sqlite_connector_dataframe_runs_existing_v5_workflow(tmp_path, monkeypa
         streamlit_app,
         "generate_structured_plan",
         lambda summary, question: PlanGenerationResult(success=True, plan=_valid_plan()),
+    )
+    monkeypatch.setattr(
+        streamlit_app,
+        "check_capability_boundary",
+        lambda question, plan: CapabilityCheckResult(
+            allowed=True,
+            capability=Capability.RANKING,
+            plan_matches_intent=True,
+            message="Request capability and generated plan are compatible.",
+        ),
     )
 
     preparation = streamlit_app.prepare_v5_plan(schema_summary, "Rank categories")

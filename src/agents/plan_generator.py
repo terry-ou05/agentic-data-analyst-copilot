@@ -7,7 +7,6 @@ from src.schemas.analysis_plan import (
     AnalysisPlan,
     PlanParseError,
     parse_analysis_plan,
-    validate_analysis_plan,
 )
 
 
@@ -54,7 +53,7 @@ def generate_structured_plan(
     schema_summary: dict,
     user_question: str,
 ) -> PlanGenerationResult:
-    """Generate, parse, and validate a structured analysis plan without execution."""
+    """Generate and parse a structured analysis plan without execution."""
     prompt = build_structured_analysis_plan_prompt(schema_summary, user_question)
     messages = [
         {
@@ -83,13 +82,5 @@ def generate_structured_plan(
         plan = parse_analysis_plan(payload)
     except PlanParseError as exc:
         return PlanGenerationResult(success=False, error=str(exc))
-
-    validation_result = validate_analysis_plan(plan, schema_summary)
-    if not validation_result.valid:
-        return PlanGenerationResult(
-            success=False,
-            error="Structured analysis plan validation failed.",
-            validation_errors=validation_result.errors,
-        )
 
     return PlanGenerationResult(success=True, plan=plan)
